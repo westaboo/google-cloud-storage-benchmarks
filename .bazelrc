@@ -1,0 +1,8 @@
+build --announce_rc
+build -c opt
+
+# C++ client requires C++ >= 14, but Bazel's default cxxopt is c++0x.
+# This app uses C++ 17 features, like std::optional.
+build --enable_platform_specific_config=true
+build:linux --cxxopt=-std=c++17
+build:linux --host_cxxopt=-std=c++17  # host_cxxopt needed for grpc, protoc

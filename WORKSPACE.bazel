@@ -1,0 +1,54 @@
+workspace(name = "cloud-cpp-mini-client")
+
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+
+# grpc
+git_repository(
+    name = "com_github_grpc_grpc",
+    remote = "https://github.com/grpc/grpc.git",
+    branch = "master",
+)
+
+# google-cloud-cpp
+git_repository(
+    name = "google_cloud_cpp",
+    remote = "https://github.com/googleapis/google-cloud-cpp.git",
+    branch = "main",
+)
+
+## absl
+#git_repository(
+#    name = "google_com_absl",
+#    remote = "https://github.com/abseil/abseil-cpp.git",
+#    branch = "master",
+#)
+
+# Build seems to require a more recent protobuf version.
+http_archive(
+    name = "com_google_protobuf",
+    urls = ["https://github.com/protocolbuffers/protobuf/archive/v23.4.tar.gz"],
+    strip_prefix = "protobuf-23.4"
+)
+
+# Load indirect dependencies due t
+#     https://github.com/bazelbuild/bazel/issues/1943
+load("@google_cloud_cpp//bazel:google_cloud_cpp_deps.bzl", "google_cloud_cpp_deps")
+
+google_cloud_cpp_deps()
+
+load("@com_google_googleapis//:repository_rules.bzl", "switched_rules_by_language")
+switched_rules_by_language(
+    name = "com_google_googleapis_imports",
+    cc = True,
+    grpc = True,
+)
+
+load("@com_github_grpc_grpc//bazel:grpc_deps.bzl", "grpc_deps")
+grpc_deps()
+
+load("@com_github_grpc_grpc//bazel:grpc_extra_deps.bzl", "grpc_extra_deps")
+grpc_extra_deps()
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file")

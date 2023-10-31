@@ -1,0 +1,108 @@
+syntax = "proto2";
+
+package google.cloud.storage_load_generation;
+
+option java_multiple_files = true;
+
+message WorkloadOptions {
+  enum OperationType {
+    // No operation specified. This will fail the workload.
+    OPERATION_TYPE_UNSPECIFIED = 0;
+
+    // Egress operation. Stage objects and then read them.
+    DOWNLOAD = 1;
+
+    // Ingress operation.
+    UPLOAD = 2;
+  }
+
+  // Options for the Storage client.
+  message StorageClientOptions {
+    // The preferred HTTP version.
+    optional string rest_http_version = 1;
+
+    // The JSON API endpoint.
+    optional string rest_endpoint = 2 [default = "https://www.googleapis.com"];
+
+    // The gRPC API endpoint.
+    optional string grpc_endpoint = 3
+        [default = "google-c2p:///storage.googleapis.com"];
+
+    // The number of gRPC channels.
+    optional int32 grpc_channel_count = 4;
+
+    // The maximum time allowed for data to 'stall' (make insufficient
+    // progress). This option is intended for troubleshooting. Most of the time
+    // the value is not expected to change the library performance.
+    optional string request_stall_timeout = 5;
+
+    // The request is aborted if the average rate is below this limit for the
+    // period.
+    optional uint32 request_stall_minimum_rate = 6;
+
+    // The default number of gRPC background threads.
+    optional uint32 grpc_background_threads = 7;
+
+    // The size of the REST connection pools.
+    optional uint32 rest_pool_size = 8;
+  }
+
+  // Options for Download operations.
+  message DownloadOptions {
+    // Read size for partial object download. No value specified downloads the
+    // entire object.
+    optional int64 read_size = 1;
+
+    // Read buffer size.
+    optional uint32 read_buffer_size = 2 [default = 4194304];  // 4MiB
+  }
+
+  // Options for upload operations.
+  message UploadOptions {
+    // The resumable upload chunk size.
+    optional int64 resumable_upload_chunk_size = 1
+        [default = 67108864];  // 64MiB
+  }
+
+  optional OperationType operation = 1;
+
+  // User defined labels to tag the results.
+  optional string labels = 2;
+
+  // The bucket where the dataset is located.
+  optional string bucket_name = 3;
+
+  // The dataset prefix.
+  optional string object_prefix = 4 [default = "objects/"];
+
+  // The minimum object size.
+  optional int64 minimum_object_size = 5 [default = 10485760];  // 10MiB
+
+  // The maximum object size.
+  optional int64 maximum_object_size = 6 [default = 10485760];  // 10MiB
+
+  // The number of requests to issue.
+  optional int32 request_count = 7 [default = 1000];
+
+  // The number of threads in the benchmark.
+  optional int32 thread_count = 8 [default = 1];
+
+  // The API (JSON or GRPC) for the benchmark.
+  optional string api = 9 [default = "GRPC"];
+
+  // Use a different storage::Client object in each thread.
+  optional bool client_per_thread = 10 [default = false];
+
+  // Common storage client options.
+  optional StorageClientOptions storage_client_options = 11;
+
+  // Options specific to the operation.
+  oneof operation_options {
+    DownloadOptions download_options = 12;
+    UploadOptions upload_options = 13;
+  }
+
+  // Exit the benchmark after parsing flags. Do not set.
+  optional bool exit_after_parse = 99999999 [default = false];
+}
+
