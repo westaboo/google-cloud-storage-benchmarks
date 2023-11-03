@@ -81,25 +81,28 @@ message WorkloadOptions {
   // The maximum object size.
   optional int64 maximum_object_size = 6 [default = 10485760];  // 10MiB
 
-  // The number of requests to issue.
-  optional int32 request_count = 7 [default = 1000];
+  // The number of VMs to create for the workload.
+  optional int32 vm_count = 7 [default = 1];
 
-  // The number of threads in the benchmark.
-  optional int32 thread_count = 8 [default = 1];
+  // The number of requests to issue (per VM).
+  optional int32 request_count = 8 [default = 1000];
+
+  // The number of threads (per VM).
+  optional int32 thread_count = 9 [default = 32];
 
   // The API (JSON or GRPC) for the benchmark.
-  optional string api = 9 [default = "GRPC"];
+  optional string api = 10 [default = "GRPC"];
 
   // Use a different storage::Client object in each thread.
-  optional bool client_per_thread = 10 [default = false];
+  optional bool client_per_thread = 11 [default = false];
 
   // Common storage client options.
-  optional StorageClientOptions storage_client_options = 11;
+  optional StorageClientOptions storage_client_options = 12;
 
   // Options specific to the operation.
   oneof operation_options {
-    DownloadOptions download_options = 12;
-    UploadOptions upload_options = 13;
+    DownloadOptions download_options = 13;
+    UploadOptions upload_options = 14;
   }
 
   // Exit the benchmark after parsing flags. Do not set.
