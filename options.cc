@@ -42,14 +42,10 @@ google::cloud::Options GetStorageClientOptions(
     storage_client_options.set<gcs_ex::HttpVersionOption>(
         workload_options.storage_client_options().rest_http_version());
   }
-  if (workload_options.storage_client_options().has_rest_endpoint()) {
-    storage_client_options.set<gcs::RestEndpointOption>(
-        workload_options.storage_client_options().rest_endpoint());
-  }
-  if (workload_options.storage_client_options().has_grpc_endpoint()) {
-    storage_client_options.set<EndpointOption>(
-        workload_options.storage_client_options().grpc_endpoint());
-  }
+  storage_client_options.set<gcs::RestEndpointOption>(
+      workload_options.storage_client_options().rest_endpoint());
+  storage_client_options.set<EndpointOption>(
+      workload_options.storage_client_options().grpc_endpoint());
   if (workload_options.storage_client_options().has_grpc_channel_count()) {
     storage_client_options.set<GrpcNumChannelsOption>(
         workload_options.storage_client_options().grpc_channel_count());
