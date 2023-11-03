@@ -18,13 +18,6 @@ git_repository(
     branch = "main",
 )
 
-## absl
-#git_repository(
-#    name = "google_com_absl",
-#    remote = "https://github.com/abseil/abseil-cpp.git",
-#    branch = "master",
-#)
-
 # Build seems to require a more recent protobuf version.
 http_archive(
     name = "com_google_protobuf",

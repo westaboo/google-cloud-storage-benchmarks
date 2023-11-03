@@ -25,6 +25,7 @@
 #include "google/cloud/options.h"
 #include "google/cloud/testing_util/command_line_parsing.h"
 #include "google/cloud/testing_util/timer.h"
+#include "google/protobuf/duration.pb.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/time.h"
 
@@ -594,6 +595,12 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   if (workload_options->exit_after_parse()) return 0;
+
+  // Pause this workload to accommodate for the start offset.
+  if (workload_options->has_start_offset()) {
+    std::this_thread::sleep_for(
+        std::chrono::seconds(workload_options->start_offset().seconds()));
+  }
 
   // Create the client and print workload information.
   // TODO(zhanif): Add upload and download information.

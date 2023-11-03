@@ -2,6 +2,8 @@ syntax = "proto2";
 
 package google.cloud.storage_load_generation;
 
+import "google/protobuf/duration.proto";
+
 option java_multiple_files = true;
 
 message WorkloadOptions {
@@ -107,6 +109,8 @@ message WorkloadOptions {
     DownloadOptions download_options = 13;
     UploadOptions upload_options = 14;
   }
+
+  optional google.protobuf.Duration start_offset = 15;
 
   // Exit the benchmark after parsing flags. Do not set.
   optional bool exit_after_parse = 99999999 [default = false];
