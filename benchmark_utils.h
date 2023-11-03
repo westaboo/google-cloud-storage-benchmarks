@@ -116,6 +116,20 @@ std::string FormatBandwidthGbPerSecond(
   return std::move(os).str();
 }
 
+template <typename Rep, typename Period>
+std::string FormatQueriesPerSecond(size_t queries,
+                                   std::chrono::duration<Rep, Period> elapsed) {
+  using ns = ::std::chrono::nanoseconds;
+  auto const elapsed_ns = std::chrono::duration_cast<ns>(elapsed);
+  if (elapsed_ns == ns(0)) return "NaN";
+
+  auto const qps = static_cast<double>(queries) /
+                   static_cast<double>(elapsed_ns.count()) * 1000000000;
+  std::ostringstream os;
+  os << std::fixed << std::setprecision(2) << qps;
+  return std::move(os).str();
+}
+
 // Print any well-known options.
 void PrintOptions(std::ostream& os, std::string const& prefix,
                   Options const& options);
