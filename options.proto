@@ -3,6 +3,7 @@ syntax = "proto2";
 package google.cloud.storage_load_generation;
 
 import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
 
 option java_multiple_files = true;
 
@@ -110,7 +111,13 @@ message WorkloadOptions {
     UploadOptions upload_options = 14;
   }
 
-  optional google.protobuf.Duration start_offset = 15;
+  // Start workload options.
+  oneof start {
+    // Start the workload after a specified offset after VM creation.
+    google.protobuf.Duration start_offset = 15;
+    // Start the workload at a specified timestamp.
+    google.protobuf.Timestamp start_time = 16;
+  }
 
   // Exit the benchmark after parsing flags. Do not set.
   optional bool exit_after_parse = 99999999 [default = false];

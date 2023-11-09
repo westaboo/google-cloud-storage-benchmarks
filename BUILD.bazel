@@ -21,7 +21,10 @@ licenses(["notice"])  # Apache 2.0
 proto_library(
     name = "options_proto",
     srcs = ["options.proto"],
-    deps = ["@com_google_protobuf//:duration_proto"]
+    deps = [
+        "@com_google_protobuf//:duration_proto",
+        "@com_google_protobuf//:timestamp_proto",
+    ],
 )
 
 cc_proto_library(

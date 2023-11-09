@@ -27,6 +27,7 @@
 #include "google/cloud/testing_util/timer.h"
 #include "google/protobuf/duration.pb.h"
 #include "absl/strings/str_format.h"
+#include "absl/time/clock.h"
 #include "absl/time/time.h"
 
 namespace {
@@ -597,13 +598,16 @@ int main(int argc, char* argv[]) {
   if (workload_options->exit_after_parse()) return 0;
 
   // Pause this workload to accommodate for the start offset.
-  if (workload_options->has_start_offset()) {
-    std::this_thread::sleep_for(
-        std::chrono::seconds(workload_options->start_offset().seconds()));
+  std::int64_t start_offset_seconds =
+      workload_options->has_start_time()
+          ? static_cast<std::int64_t>(workload_options->start_time().seconds() -
+			              absl::GetCurrentTimeNanos() / 1000000000)
+          : workload_options->start_offset().seconds();
+  if (start_offset_seconds > 0) {
+    std::this_thread::sleep_for(std::chrono::seconds(start_offset_seconds));
   }
 
   // Create the client and print workload information.
-  // TODO(zhanif): Add upload and download information.
   auto client = MakeClient(*workload_options);
   std::cout << "# Start time: " << gcs_bm::CurrentTime()
             << "\n# Labels: " << workload_options->labels()
