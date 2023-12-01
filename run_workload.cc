@@ -364,7 +364,7 @@ void DownloadMain(gcs::Client& client, const WorkloadOptions& workload_options,
                   std::vector<TaskConfig>& configs, Counters& accumulated) {
   // Generate the dataset.
   constexpr std::int32_t kMaxObjects = 1;
-  std::vector<gcs::ObjectMetadata> objects(kMaxObjects);
+  std::vector<gcs::ObjectMetadata> objects;
   std::vector<UploadHelper::UploadItem> upload_items(kMaxObjects);
   std::mt19937_64 generator(std::random_device{}());
   std::generate(upload_items.begin(), upload_items.end(), [&] {
@@ -515,7 +515,7 @@ void GetObjectMetadataMain(gcs::Client& client,
                            Counters& accumulated) {
   // Generate the dataset.
   constexpr std::int32_t kMaxObjects = 1;
-  std::vector<gcs::ObjectMetadata> staged_objects(kMaxObjects);
+  std::vector<gcs::ObjectMetadata> staged_objects;
   std::vector<UploadHelper::UploadItem> upload_items(kMaxObjects);
   std::mt19937_64 generator(std::random_device{}());
   std::generate(upload_items.begin(), upload_items.end(), [&] {
