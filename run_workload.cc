@@ -145,6 +145,7 @@ class DownloadHelper {
     while (stream.read(buffer.data(), buffer_size)) {
       object_bytes += stream.gcount();
     }
+    object_bytes += stream.gcount();
     stream.Close();
     // Flush the logs, if any.
     if (stream.bad()) google::cloud::LogSink::Instance().Flush();
