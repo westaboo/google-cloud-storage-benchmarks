@@ -1,10 +1,10 @@
-// Copyright 2021 Google LLC
+// Copyright 2023 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// https://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,36 +12,57 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "options.h"
-#include "benchmark_utils.h"
+#include <algorithm>
+#include <chrono>  // NOLINT
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <future>  // NOLINT
+#include <ios>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <mutex>  // NOLINT
+#include <numeric>
+#include <optional>
+#include <ostream>
+#include <random>
+#include <string>
+#include <thread>  // NOLINT
+#include <utility>
+#include <vector>
 
-#include "google/cloud/storage/client.h"
-#include "google/cloud/storage/grpc_plugin.h"
-#include "google/cloud/grpc_options.h"
-#include "google/cloud/internal/build_info.h"
-#include "google/cloud/internal/getenv.h"
-#include "google/cloud/internal/random.h"
-#include "google/cloud/log.h"
-#include "google/cloud/options.h"
-#include "google/cloud/testing_util/command_line_parsing.h"
-#include "google/cloud/testing_util/timer.h"
-#include "google/protobuf/duration.pb.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
+#include "google/cloud/internal/build_info.h"
+#include "google/cloud/log.h"
+#include "google/cloud/options.h"
+#include "google/cloud/status.h"
+#include "google/cloud/status_or.h"
+#include "google/cloud/storage/client.h"
+#include "google/cloud/storage/download_options.h"
+#include "google/cloud/storage/grpc_plugin.h"
+#include "google/cloud/storage/object_metadata.h"
+#include "google/cloud/storage/options.h"
+#include "google/cloud/storage/version.h"
+#include "google/cloud/storage/well_known_parameters.h"
+#include "google/protobuf/duration.pb.h"
+#include "google/protobuf/timestamp.pb.h"
+#include "options.h"
+#include "options.pb.h"
+#include "timer.h"
+#include "utils.h"
 
 namespace {
 
 namespace gcs = ::google::cloud::storage;
-namespace gcs_bm = ::google::cloud::storage_benchmarks;
-namespace gcs_load = ::google::cloud::storage_load_generation;
-
-using gcs_bm::FormatBandwidthGbPerSecond;
-using gcs_bm::FormatQueriesPerSecond;
-using gcs_bm::FormatTimestamp;
-using ::google::cloud::storage_load_generation::WorkloadOptions;
-using ::google::cloud::testing_util::FormatSize;
-using ::google::cloud::testing_util::Timer;
+using ::google::cloud::storage::load_generator::FormatBandwidthGbPerSecond;
+using ::google::cloud::storage::load_generator::FormatQueriesPerSecond;
+using ::google::cloud::storage::load_generator::FormatSize;
+using ::google::cloud::storage::load_generator::Timer;
+using ::google::cloud::storage::load_generator::WorkerOptions;
 using Counters = std::map<std::string, std::int64_t>;
 
 char const kDescription[] =
@@ -52,16 +73,14 @@ for each operation.
 
 The benchmark uses multiple threads to perform operations, expecting higher
 throughput as threads are added. The benchmark runs multiple iterations of the
-same workload. After each iteration it prints the latency for each request,
+same workload. After each iteration it prints the averge latency,
 with arbitrary annotations describing the library configuration (API, buffer
 sizes, the iteration number), as well as arbitrary labels provided by the
 application, and the overall results for the iteration ("denormalized" to
 simplify any external scripts used in analysis).
 
 The data for each object is pre-generated and used by all threads, and consist
-of a repeating block of N lines with random ASCII characters. The size of this
-block is configurable in the command-line. We recommend using multiples of
-256KiB for this block size.
+of a repeating block of N lines with random ASCII characters.
 )""";
 
 struct TaskConfig {
@@ -85,11 +104,9 @@ std::string ExtractUploadId(std::string v) {
   return v.substr(pos + std::strlen(kRestField));
 }
 
-google::cloud::StatusOr<WorkloadOptions> ParseArgs(int argc, char* argv[]) {
-  auto workload_options =
-      gcs_load::ParseWorkloadOptions({argv, argv + argc}, kDescription);
-  if (!workload_options) return workload_options;
-  return workload_options;
+google::cloud::StatusOr<WorkerOptions> ParseArgs(int argc, char* argv[]) {
+  return gcs::load_generator::ParseWorkerOptions({argv, argv + argc},
+                                                 kDescription);
 }
 
 class DownloadHelper {
@@ -109,15 +126,15 @@ class DownloadHelper {
     Counters counters;
   };
 
-  DownloadHelper(const WorkloadOptions& workload_options,
+  DownloadHelper(const WorkerOptions& worker_options,
                  std::vector<gcs::ObjectMetadata> objects)
-      : workload_options_(workload_options),
+      : worker_options_(worker_options),
         objects_(std::move(objects)),
-        remaining_requests_(workload_options.request_count()) {}
+        remaining_requests_(worker_options.request_count()) {}
 
   static DownloadDetail DownloadOneObject(
       gcs::Client& client, std::mt19937_64& generator,
-      const WorkloadOptions& benchmark_options,
+      const WorkerOptions& benchmark_options,
       const gcs::ObjectMetadata& object) {
     using clock = std::chrono::steady_clock;
     using std::chrono::duration_cast;
@@ -143,9 +160,8 @@ class DownloadHelper {
         client.ReadObject(object.bucket(), object.name(),
                           gcs::Generation(object.generation()), range);
     while (stream.read(buffer.data(), buffer_size)) {
-      object_bytes += stream.gcount();
+      object_bytes += static_cast<std::uint64_t>(stream.gcount());
     }
-    object_bytes += stream.gcount();
     stream.Close();
     // Flush the logs, if any.
     if (stream.bad()) google::cloud::LogSink::Instance().Flush();
@@ -177,7 +193,7 @@ class DownloadHelper {
       --remaining_requests_;
       lk.unlock();
       result.details.push_back(
-          DownloadOneObject(client, generator, workload_options_, object));
+          DownloadOneObject(client, generator, worker_options_, object));
       result.bytes_downloaded += result.details.back().bytes_downloaded;
     }
     return result;
@@ -185,7 +201,7 @@ class DownloadHelper {
 
  private:
   std::mutex mu_;
-  const WorkloadOptions& workload_options_;
+  const WorkerOptions& worker_options_;
   const std::vector<gcs::ObjectMetadata> objects_;
   std::int32_t remaining_requests_;
 };
@@ -194,7 +210,7 @@ class UploadHelper {
  public:
   struct UploadItem {
     std::string object_name;
-    std::uint64_t object_size;
+    std::uint64_t object_size = 0UL;
   };
 
   struct UploadDetail {
@@ -215,13 +231,13 @@ class UploadHelper {
     Counters counters;
   };
 
-  UploadHelper(const WorkloadOptions& workload_options,
+  UploadHelper(const WorkerOptions& worker_options,
                std::vector<UploadItem> upload_items)
-      : workload_options_(workload_options),
+      : worker_options_(worker_options),
         remaining_work_(std::move(upload_items)) {}
 
   static UploadDetail UploadOneObject(gcs::Client& client,
-                                      const WorkloadOptions& workload_options,
+                                      const WorkerOptions& worker_options,
                                       const UploadItem& upload,
                                       const std::string& write_block,
                                       bool return_metadata = false) {
@@ -234,7 +250,7 @@ class UploadHelper {
     auto const start = std::chrono::system_clock::now();
 
     auto stream =
-        client.WriteObject(workload_options.bucket_name(), upload.object_name);
+        client.WriteObject(worker_options.bucket_name(), upload.object_name);
     auto object_bytes = std::uint64_t{0};
     while (object_bytes < upload.object_size) {
       auto n = std::min(static_cast<std::uint64_t>(buffer_size),
@@ -252,7 +268,7 @@ class UploadHelper {
     auto peer = ExtractPeer(stream.headers());
     auto upload_id = ExtractUploadId(stream.resumable_session_id());
     return UploadDetail{.start_time = start,
-                        .bucket_name = workload_options.bucket_name(),
+                        .bucket_name = worker_options.bucket_name(),
                         .object_name = upload.object_name,
                         .upload_id = std::move(upload_id),
                         .peer = std::move(peer),
@@ -277,7 +293,7 @@ class UploadHelper {
       remaining_work_.pop_back();
       lk.unlock();
       result.details.push_back(
-          UploadOneObject(client, workload_options_, upload, write_block));
+          UploadOneObject(client, worker_options_, upload, write_block));
       result.bytes_uploaded += result.details.back().bytes_uploaded;
     }
     return result;
@@ -285,7 +301,7 @@ class UploadHelper {
 
  private:
   std::mutex mu_;
-  const WorkloadOptions& workload_options_;
+  const WorkerOptions& worker_options_;
   std::vector<UploadItem> remaining_work_;
 };
 
@@ -301,11 +317,10 @@ class GetObjectMetadataHelper {
     Counters counters;
   };
 
-  GetObjectMetadataHelper(const WorkloadOptions& workload_options,
+  GetObjectMetadataHelper(const WorkerOptions& worker_options,
                           std::vector<gcs::ObjectMetadata> objects)
-      : workload_options_(workload_options),
-        objects_(std::move(objects)),
-        remaining_requests_(workload_options.request_count()) {}
+      : objects_(std::move(objects)),
+        remaining_requests_(worker_options.request_count()) {}
 
   static GetObjectMetadataDetail GetObjectMetadata(
       gcs::Client& client, const gcs::ObjectMetadata& object) {
@@ -339,19 +354,19 @@ class GetObjectMetadataHelper {
 
  private:
   std::mutex mu_;
-  const WorkloadOptions& workload_options_;
   const std::vector<gcs::ObjectMetadata> objects_;
   std::int32_t remaining_requests_;
 };
 
-gcs::Client MakeClient(const WorkloadOptions& workload_options) {
-  auto opts = GetStorageClientOptions(workload_options)
-                  // Make the upload buffer size small, the library will flush
-                  // on almost all `.write()` requests.
-                  .set<gcs::UploadBufferSizeOption>(256 * gcs_bm::kKiB);
+gcs::Client MakeClient(const WorkerOptions& worker_options) {
+  auto opts =
+      GetStorageClientOptions(worker_options)
+          // Make the upload buffer size small, the library will flush
+          // on almost all `.write()` requests.
+          .set<gcs::UploadBufferSizeOption>(256 * gcs::load_generator::kKiB);
 #if GOOGLE_CLOUD_CPP_STORAGE_HAVE_GRPC
   namespace gcs_ex = ::google::cloud::storage_experimental;
-  if (workload_options.api() == "GRPC") {
+  if (worker_options.api() == "GRPC") {
     return gcs_ex::DefaultGrpcClient(
         std::move(opts).set<gcs_ex::GrpcPluginOption>("metadata"));
   }
@@ -361,43 +376,50 @@ gcs::Client MakeClient(const WorkloadOptions& workload_options) {
 
 }  // namespace
 
-void DownloadMain(gcs::Client& client, const WorkloadOptions& workload_options,
+void DownloadMain(gcs::Client& client, const WorkerOptions& worker_options,
                   std::vector<TaskConfig>& configs, Counters& accumulated) {
   // Generate the dataset.
   constexpr std::int32_t kMaxObjects = 1;
-  std::vector<gcs::ObjectMetadata> objects;
+  std::vector<gcs::ObjectMetadata> objects(kMaxObjects);
   std::vector<UploadHelper::UploadItem> upload_items(kMaxObjects);
   std::mt19937_64 generator(std::random_device{}());
   std::generate(upload_items.begin(), upload_items.end(), [&] {
     auto const object_size = std::uniform_int_distribution<std::uint64_t>(
-        workload_options.minimum_object_size(),
-        workload_options.maximum_object_size())(generator);
-    return UploadHelper::UploadItem{workload_options.object_prefix() +
-                                        gcs_bm::MakeRandomObjectName(generator),
-                                    object_size};
+        worker_options.minimum_object_size() > 0
+            ? static_cast<std::uint64_t>(worker_options.minimum_object_size())
+            : 0UL,
+        worker_options.maximum_object_size() > 0
+            ? static_cast<std::uint64_t>(worker_options.maximum_object_size())
+            : 0UL)(generator);
+
+    return UploadHelper::UploadItem{
+        worker_options.object_prefix() +
+            gcs::load_generator::MakeRandomObjectName(generator),
+        object_size};
   });
   auto const write_block = [&] {
     std::string block;
     std::int64_t lineno = 0;
     while (block.size() <
-           workload_options.upload_options().resumable_upload_chunk_size()) {
+           worker_options.upload_options().resumable_upload_chunk_size()) {
       // Create data that consists of equally-sized, numbered lines.
       auto constexpr kLineSize = 128;
       auto header = absl::StrFormat("%09d", lineno++);
       block += header;
-      block += gcs_bm::MakeRandomData(generator, kLineSize - header.size());
+      block += gcs::load_generator::MakeRandomData(generator,
+                                                   kLineSize - header.size());
     }
     return block;
   }();
-  for (int i = 0; i < upload_items.size(); ++i) {
+  for (size_t i = 0; i < upload_items.size(); ++i) {
     UploadHelper::UploadDetail object_detail = UploadHelper::UploadOneObject(
-        client, workload_options, upload_items.at(i), write_block,
+        client, worker_options, upload_items.at(i), write_block,
         /*return_metadata=*/true);
     objects.push_back(*object_detail.metadata);
   }
 
   auto timer = Timer::PerProcess();
-  DownloadHelper download_helper(workload_options, objects);
+  DownloadHelper download_helper(worker_options, objects);
   auto task = [&download_helper](const TaskConfig& c) {
     return download_helper.DownloadTask(c);
   };
@@ -427,44 +449,50 @@ void DownloadMain(gcs::Client& client, const WorkloadOptions& workload_options,
   auto accumulate_bytes_downloaded =
       [](const std::vector<DownloadHelper::DownloadTaskResult>& r) {
         return std::accumulate(
-            r.begin(), r.end(), std::int64_t{0},
-            [](std::int64_t a, const DownloadHelper::DownloadTaskResult& b) {
+            r.begin(), r.end(), std::uint64_t{0},
+            [](std::uint64_t a, const DownloadHelper::DownloadTaskResult& b) {
               return a + b.bytes_downloaded;
             });
       };
   auto const downloaded_bytes = accumulate_bytes_downloaded(iteration_results);
   auto const bandwidth =
       FormatBandwidthGbPerSecond(downloaded_bytes, usage.elapsed_time);
-  std::cout << "# " << gcs_bm::CurrentTime()
+  std::cout << "# " << gcs::load_generator::CurrentTime()
             << " downloaded=" << downloaded_bytes
             << " cpu_time=" << absl::FromChrono(usage.cpu_time)
             << " elapsed_time=" << absl::FromChrono(usage.elapsed_time)
             << " Gbit/s=" << bandwidth << std::endl;
 }
 
-void UploadMain(const WorkloadOptions& workload_options,
+void UploadMain(const WorkerOptions& worker_options,
                 std::vector<TaskConfig>& configs, Counters& accumulated) {
   std::vector<UploadHelper::UploadItem> upload_items(
-      workload_options.request_count());
+      static_cast<size_t>(worker_options.request_count()));
   std::mt19937_64 generator(std::random_device{}());
   std::generate(upload_items.begin(), upload_items.end(), [&] {
     auto const object_size = std::uniform_int_distribution<std::uint64_t>(
-        workload_options.minimum_object_size(),
-        workload_options.maximum_object_size())(generator);
-    return UploadHelper::UploadItem{workload_options.object_prefix() +
-                                        gcs_bm::MakeRandomObjectName(generator),
-                                    object_size};
+        worker_options.minimum_object_size() > 0
+            ? static_cast<std::uint64_t>(worker_options.minimum_object_size())
+            : 0UL,
+        worker_options.maximum_object_size() > 0
+            ? static_cast<std::uint64_t>(worker_options.maximum_object_size())
+            : 0UL)(generator);
+    return UploadHelper::UploadItem{
+        worker_options.object_prefix() +
+            gcs::load_generator::MakeRandomObjectName(generator),
+        object_size};
   });
   auto const write_block = [&] {
     std::string block;
     std::int64_t lineno = 0;
     while (block.size() <
-           workload_options.upload_options().resumable_upload_chunk_size()) {
+           worker_options.upload_options().resumable_upload_chunk_size()) {
       // Create data that consists of equally-sized, numbered lines.
       auto constexpr kLineSize = 128;
       auto header = absl::StrFormat("%09d", lineno++);
       block += header;
-      block += gcs_bm::MakeRandomData(generator, kLineSize - header.size());
+      block += gcs::load_generator::MakeRandomData(generator,
+                                                   kLineSize - header.size());
     }
     return block;
   }();
@@ -472,14 +500,14 @@ void UploadMain(const WorkloadOptions& workload_options,
   auto accumulate_bytes_uploaded =
       [](const std::vector<UploadHelper::UploadTaskResult>& r) {
         return std::accumulate(
-            r.begin(), r.end(), std::int64_t{0},
-            [](std::int64_t a, const UploadHelper::UploadTaskResult& b) {
+            r.begin(), r.end(), std::uint64_t{0},
+            [](std::uint64_t a, const UploadHelper::UploadTaskResult& b) {
               return a + b.bytes_uploaded;
             });
       };
 
   auto timer = Timer::PerProcess();
-  UploadHelper upload_helper(workload_options, upload_items);
+  UploadHelper upload_helper(worker_options, upload_items);
   auto task = [&upload_helper, &write_block](const TaskConfig& c) {
     return upload_helper.UploadTask(c, write_block);
   };
@@ -504,51 +532,58 @@ void UploadMain(const WorkloadOptions& workload_options,
   }
   auto const bandwidth =
       FormatBandwidthGbPerSecond(uploaded_bytes, usage.elapsed_time);
-  std::cout << "# " << gcs_bm::CurrentTime() << " uploaded=" << uploaded_bytes
+  std::cout << "# " << gcs::load_generator::CurrentTime()
+            << " uploaded=" << uploaded_bytes
             << " cpu_time=" << absl::FromChrono(usage.cpu_time)
             << " elapsed_time=" << absl::FromChrono(usage.elapsed_time)
             << " Gbit/s=" << bandwidth << std::endl;
 }
 
 void GetObjectMetadataMain(gcs::Client& client,
-                           const WorkloadOptions& workload_options,
+                           const WorkerOptions& worker_options,
                            std::vector<TaskConfig>& configs,
                            Counters& accumulated) {
   // Generate the dataset.
   constexpr std::int32_t kMaxObjects = 1;
-  std::vector<gcs::ObjectMetadata> staged_objects;
+  std::vector<gcs::ObjectMetadata> staged_objects(kMaxObjects);
   std::vector<UploadHelper::UploadItem> upload_items(kMaxObjects);
   std::mt19937_64 generator(std::random_device{}());
   std::generate(upload_items.begin(), upload_items.end(), [&] {
     auto const object_size = std::uniform_int_distribution<std::uint64_t>(
-        workload_options.minimum_object_size(),
-        workload_options.maximum_object_size())(generator);
-    return UploadHelper::UploadItem{workload_options.object_prefix() +
-                                        gcs_bm::MakeRandomObjectName(generator),
-                                    object_size};
+        worker_options.minimum_object_size() > 0
+            ? static_cast<std::uint64_t>(worker_options.minimum_object_size())
+            : 0UL,
+        worker_options.maximum_object_size() > 0
+            ? static_cast<std::uint64_t>(worker_options.maximum_object_size())
+            : 0UL)(generator);
+    return UploadHelper::UploadItem{
+        worker_options.object_prefix() +
+            gcs::load_generator::MakeRandomObjectName(generator),
+        object_size};
   });
   auto const write_block = [&] {
     std::string block;
     std::int64_t lineno = 0;
     while (block.size() <
-           workload_options.upload_options().resumable_upload_chunk_size()) {
+           worker_options.upload_options().resumable_upload_chunk_size()) {
       // Create data that consists of equally-sized, numbered lines.
       auto constexpr kLineSize = 128;
       auto header = absl::StrFormat("%09d", lineno++);
       block += header;
-      block += gcs_bm::MakeRandomData(generator, kLineSize - header.size());
+      block += gcs::load_generator::MakeRandomData(generator,
+                                                   kLineSize - header.size());
     }
     return block;
   }();
-  for (int i = 0; i < upload_items.size(); ++i) {
+  for (size_t i = 0; i < upload_items.size(); ++i) {
     UploadHelper::UploadDetail object_detail = UploadHelper::UploadOneObject(
-        client, workload_options, upload_items.at(i), write_block,
+        client, worker_options, upload_items.at(i), write_block,
         /*return_metadata=*/true);
     staged_objects.push_back(*object_detail.metadata);
   }
 
   auto timer = Timer::PerProcess();
-  GetObjectMetadataHelper get_object_metadata_helper(workload_options,
+  GetObjectMetadataHelper get_object_metadata_helper(worker_options,
                                                      staged_objects);
   auto task = [&get_object_metadata_helper](const TaskConfig& c) {
     return get_object_metadata_helper.GetObjectMetadataTask(c);
@@ -577,9 +612,8 @@ void GetObjectMetadataMain(gcs::Client& client,
     requests += r.details.size();
   }
 
-  auto const qps =
-      FormatQueriesPerSecond(requests, usage.elapsed_time);
-  std::cout << "# " << gcs_bm::CurrentTime()
+  auto const qps = FormatQueriesPerSecond(requests, usage.elapsed_time);
+  std::cout << "# " << gcs::load_generator::CurrentTime()
             << " requests=" << requests
             << " cpu_time=" << absl::FromChrono(usage.cpu_time)
             << " elapsed_time=" << absl::FromChrono(usage.elapsed_time)
@@ -590,41 +624,47 @@ void GetObjectMetadataMain(gcs::Client& client,
 
 int main(int argc, char* argv[]) {
   // Parse command line flags.
-  google::cloud::StatusOr<WorkloadOptions> workload_options =
-      ParseArgs(argc, argv);
-  if (!workload_options) {
-    std::cerr << workload_options.status() << "\n";
+  google::cloud::StatusOr<WorkerOptions> worker_options = ParseArgs(argc, argv);
+  if (!worker_options) {
+    std::cerr << worker_options.status() << "\n";
     return 1;
   }
-  if (workload_options->exit_after_parse()) return 0;
+  if (worker_options->exit_after_parse()) return 0;
 
   // Pause this workload to accommodate for the start offset.
   std::int64_t start_offset_seconds =
-      workload_options->has_start_time()
-          ? static_cast<std::int64_t>(workload_options->start_time().seconds() -
-			              absl::GetCurrentTimeNanos() / 1000000000)
-          : workload_options->start_offset().seconds();
+      worker_options->has_start_time()
+          ? static_cast<std::int64_t>(worker_options->start_time().seconds() -
+                                      absl::GetCurrentTimeNanos() / 1000000000)
+          : worker_options->start_offset().seconds();
   if (start_offset_seconds > 0) {
     std::this_thread::sleep_for(std::chrono::seconds(start_offset_seconds));
   }
 
   // Create the client and print workload information.
-  auto client = MakeClient(*workload_options);
-  std::cout << "# Start time: " << gcs_bm::CurrentTime()
-            << "\n# Labels: " << workload_options->labels()
-            << "\n# Bucket Name: " << workload_options->bucket_name()
-            << "\n# Object Prefix: " << workload_options->object_prefix()
-            << "\n# Request Count: " << workload_options->request_count()
+  auto client = MakeClient(*worker_options);
+  std::cout << "# Start time: " << gcs::load_generator::CurrentTime()
+            << "\n# Labels: " << worker_options->labels()
+            << "\n# Bucket Name: " << worker_options->bucket_name()
+            << "\n# Object Prefix: " << worker_options->object_prefix()
+            << "\n# Request Count: " << worker_options->request_count()
             << "\n# Minimum Object Size: "
-            << FormatSize(workload_options->minimum_object_size())
+            << FormatSize(worker_options->minimum_object_size() > 0
+                              ? static_cast<std::uint64_t>(
+                                    worker_options->minimum_object_size())
+                              : 0)
             << "\n# Maximum Object Size: "
-            << FormatSize(workload_options->maximum_object_size())
-            << "\n# Thread Count: " << workload_options->thread_count()
-            << "\n# API: " << workload_options->api()
+            << FormatSize(worker_options->maximum_object_size() > 0
+                              ? static_cast<std::uint64_t>(
+                                    worker_options->maximum_object_size())
+                              : 0)
+            << "\n# Thread Count: " << worker_options->thread_count()
+            << "\n# API: " << worker_options->api()
             << "\n# Client Per Thread: " << std::boolalpha
-            << workload_options->client_per_thread();
-  gcs_bm::PrintOptions(std::cout, "Client Options",
-                       gcs_load::GetStorageClientOptions(*workload_options));
+            << worker_options->client_per_thread();
+  gcs::load_generator::PrintOptions(
+      std::cout, "Client Options",
+      gcs::load_generator::GetStorageClientOptions(*worker_options));
   std::string notes = google::cloud::storage::version_string() + ";" +
                       google::cloud::internal::compiler() + ";" +
                       google::cloud::internal::compiler_flags();
@@ -633,35 +673,36 @@ int main(int argc, char* argv[]) {
   std::cout << "\n# Build Info: " << notes << std::endl;
 
   // Create the configs.
-  auto configs = [](const WorkloadOptions& workload_options,
+  auto configs = [](const WorkerOptions& worker_options,
                     const gcs::Client& default_client) {
     std::random_device rd;
     std::vector<std::seed_seq::result_type> seeds(
-        workload_options.thread_count());
+        static_cast<size_t>(worker_options.thread_count()));
     std::seed_seq({rd(), rd(), rd()}).generate(seeds.begin(), seeds.end());
-    std::vector<TaskConfig> config(workload_options.thread_count(),
-                                   TaskConfig{.client = default_client});
+    std::vector<TaskConfig> config(
+        static_cast<size_t>(worker_options.thread_count()),
+        TaskConfig{.client = default_client});
     for (std::size_t i = 0; i != config.size(); ++i) {
-      if (workload_options.client_per_thread())
-        config[i].client = MakeClient(workload_options);
+      if (worker_options.client_per_thread())
+        config[i].client = MakeClient(worker_options);
       config[i].seed = seeds[i];
     }
     return config;
-  }(*workload_options, client);
+  }(*worker_options, client);
 
   // Run the workload.
   Counters accumulated;
-  switch (workload_options->operation()) {
-    case WorkloadOptions::DOWNLOAD:
-      DownloadMain(client, *workload_options, configs, accumulated);
+  switch (worker_options->operation()) {
+    case WorkerOptions::DOWNLOAD:
+      DownloadMain(client, *worker_options, configs, accumulated);
       break;
-    case WorkloadOptions::UPLOAD:
-      UploadMain(*workload_options, configs, accumulated);
+    case WorkerOptions::UPLOAD:
+      UploadMain(*worker_options, configs, accumulated);
       break;
-    case WorkloadOptions::GET_OBJECT_METADATA:
-      GetObjectMetadataMain(client, *workload_options, configs, accumulated);
+    case WorkerOptions::GET_OBJECT_METADATA:
+      GetObjectMetadataMain(client, *worker_options, configs, accumulated);
       break;
-    case WorkloadOptions::OPERATION_TYPE_UNSPECIFIED:
+    case WorkerOptions::OPERATION_TYPE_UNSPECIFIED:
       break;
   }
 
@@ -671,3 +712,4 @@ int main(int argc, char* argv[]) {
 
   return 0;
 }
+

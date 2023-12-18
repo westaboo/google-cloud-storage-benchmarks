@@ -37,44 +37,49 @@ cc_library(
     srcs = ["options.cc"],
     hdrs = ["options.h"],
     deps = [
-        ":benchmark_utils",
 	":options_cc_proto",
+	":utils",
         "@com_google_absl//absl/strings",
 	"@com_google_protobuf//:protobuf",
-	"@google_cloud_cpp//:experimental-storage_grpc",
+        "@google_cloud_cpp//:common",
+        "@google_cloud_cpp//:grpc_utils",
+	"@google_cloud_cpp//:storage",
     ],
-    testonly = 1,
 )
 
 cc_library(
-    name = "bounded_queue",
-    hdrs = ["bounded_queue.h"],
-    deps = ["@com_google_absl//absl/types:optional"],
+    name = "timer",
+    srcs = ["timer.cc"],
+    hdrs = ["timer.h"],
 )
 
 cc_library(
-    name = "benchmark_utils",
-    srcs = ["benchmark_utils.cc"],
-    hdrs = ["benchmark_utils.h"],
+    name = "utils",
+    srcs = ["utils.cc"],
+    hdrs = ["utils.h"],
     deps = [
-        ":bounded_queue",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
 	"@google_cloud_cpp//:experimental-storage_grpc",
-	"@google_cloud_cpp//google/cloud/storage:storage_client_testing",
+        "@google_cloud_cpp//:common",
+        "@google_cloud_cpp//:grpc_utils",
+	"@google_cloud_cpp//:storage",
     ],
-    testonly = 1,
 )
 
 cc_binary(
     name = "run_workload",
     srcs = ["run_workload.cc"],
     deps = [
-        ":benchmark_utils",
         ":options",
+        ":options_cc_proto",
+        ":timer",
+        ":utils",
         "@com_google_absl//absl/strings:str_format",
 	"@com_google_absl//absl/time",
 	"@google_cloud_cpp//:experimental-storage_grpc",
+        "@google_cloud_cpp//:common",
+	"@google_cloud_cpp//:storage",
     ],
-    testonly = 1,
 )
+

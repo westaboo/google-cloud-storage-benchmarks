@@ -1,13 +1,27 @@
+// Copyright 2023 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 syntax = "proto2";
 
-package google.cloud.storage_load_generation;
+package google.cloud.storage.load_generator;
 
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 option java_multiple_files = true;
 
-message WorkloadOptions {
+message WorkerOptions {
   enum OperationType {
     // No operation specified. This will fail the workload.
     OPERATION_TYPE_UNSPECIFIED = 0;
@@ -87,39 +101,37 @@ message WorkloadOptions {
   // The maximum object size.
   optional int64 maximum_object_size = 6 [default = 10485760];  // 10MiB
 
-  // The number of VMs to create for the workload.
-  optional int32 vm_count = 7 [default = 1];
-
   // The number of requests to issue (per VM).
-  optional int32 request_count = 8 [default = 1000];
+  optional int32 request_count = 7 [default = 1000];
 
   // The number of threads (per VM).
-  optional int32 thread_count = 9 [default = 32];
+  optional int32 thread_count = 8 [default = 64];
 
   // The API (JSON or GRPC) for the benchmark.
-  optional string api = 10 [default = "GRPC"];
+  optional string api = 9 [default = "GRPC"];
 
   // Use a different storage::Client object in each thread.
-  optional bool client_per_thread = 11 [default = false];
+  optional bool client_per_thread = 10 [default = false];
 
   // Common storage client options.
-  optional StorageClientOptions storage_client_options = 12;
+  optional StorageClientOptions storage_client_options = 11;
 
   // Options specific to the operation.
   oneof operation_options {
-    DownloadOptions download_options = 13;
-    UploadOptions upload_options = 14;
+    DownloadOptions download_options = 12;
+    UploadOptions upload_options = 13;
   }
 
   // Start workload options.
   oneof start {
     // Start the workload after a specified offset after VM creation.
-    google.protobuf.Duration start_offset = 15;
+    google.protobuf.Duration start_offset = 14;
     // Start the workload at a specified timestamp.
-    google.protobuf.Timestamp start_time = 16;
+    google.protobuf.Timestamp start_time = 15;
   }
 
-  // Exit the benchmark after parsing flags. Do not set.
+  // Exit the benchmark after parsing flags. Used for debugging, don't set for a
+  // real test.
   optional bool exit_after_parse = 99999999 [default = false];
 }
 
