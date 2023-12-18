@@ -14,10 +14,6 @@
 
 package(default_visibility = ["//visibility:private"])
 
-licenses(["notice"])  # Apache 2.0
-
-# Load generation workload detailed at go/gcs-grpc-aga-workloads.
-
 proto_library(
     name = "options_proto",
     srcs = ["options.proto"],
